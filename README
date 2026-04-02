@@ -1,1 +1,9 @@
-LocalMamba Rubustness
+LocalMamba Rubustness\
+（Mamba）\
+Ubuntu-22.04\
+Cuda 11.8\
+torch 2.4\
+causal_conv1d-1.4.0+cu118torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl\
+mamba_ssm-1.2.2+cu118torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl\
+transformer=4.36.0\
+Numpy 2.2.6\
