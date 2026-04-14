@@ -37,24 +37,41 @@ from collections import OrderedDict
 # ------------------------------------------------------------
 from einops import rearrange
 
-def shuffle_patches(images, grid_size):
+# def shuffle_patches(images, grid_size):
+#     """
+#     Shuffle patches of an image batch.
+#     images: (B, C, H, W), assumed H=W=224
+#     grid_size: int, number of patches per side (e.g., 14 -> 14x14 grid)
+#     """
+#     B, C, H, W = images.shape
+#     assert H == W == 224, "Only 224x224 images supported"
+#     patch_dim = H // grid_size
+#     # Split into patches: (B, C, H, W) -> (B, grid_size*grid_size, patch_dim*patch_dim*C)
+#     patches = rearrange(images, 'b c (h p1) (w p2) -> b (h w) (p1 p2 c)',
+#                         p1=patch_dim, p2=patch_dim)
+#     # Shuffle patches per batch
+#     indices = torch.randperm(patches.shape[1], device=patches.device)
+#     patches = patches[:, indices, :]
+#     # Reconstruct
+#     shuffled = rearrange(patches, 'b (h w) (p1 p2 c) -> b c (h p1) (w p2)',
+#                          h=grid_size, w=grid_size, p1=patch_dim, p2=patch_dim)
+#     return shuffled
+def shuffle_patches(images, grid_h, grid_w):
     """
     Shuffle patches of an image batch.
-    images: (B, C, H, W), assumed H=W=224
-    grid_size: int, number of patches per side (e.g., 14 -> 14x14 grid)
+    images: (B, C, H, W)
+    grid_h: number of patches along height
+    grid_w: number of patches along width
     """
     B, C, H, W = images.shape
-    assert H == W == 224, "Only 224x224 images supported"
-    patch_dim = H // grid_size
-    # Split into patches: (B, C, H, W) -> (B, grid_size*grid_size, patch_dim*patch_dim*C)
+    patch_h = H // grid_h
+    patch_w = W // grid_w
     patches = rearrange(images, 'b c (h p1) (w p2) -> b (h w) (p1 p2 c)',
-                        p1=patch_dim, p2=patch_dim)
-    # Shuffle patches per batch
+                        p1=patch_h, p2=patch_w)
     indices = torch.randperm(patches.shape[1], device=patches.device)
     patches = patches[:, indices, :]
-    # Reconstruct
     shuffled = rearrange(patches, 'b (h w) (p1 p2 c) -> b c (h p1) (w p2)',
-                         h=grid_size, w=grid_size, p1=patch_dim, p2=patch_dim)
+                         h=grid_h, w=grid_w, p1=patch_h, p2=patch_w)
     return shuffled
 
 def random_patch_drop(images, grid_size, drop_ratio):
@@ -248,6 +265,8 @@ def parse_args():
 
      # Salient drop 参数
     parser.add_argument('--salient_drop', action='store_true', default=False, help='Enable salient patch drop')
+    parser.add_argument('--shuffle_h', type=int, nargs='+', default=None, help='List of grid heights for shuffle test (e.g., 2 4 8)')
+    parser.add_argument('--shuffle_w', type=int, nargs='+', default=None, help='List of grid widths for shuffle test (e.g., 2 4 8)')
 
     # 其他
     parser.add_argument('--log_interval', type=int, default=50)
@@ -301,7 +320,7 @@ def get_dataloader(args):
                         num_workers=args.workers, pin_memory=True)
     return loader
 
-def evaluate(args, model, loader, test_type, grid_size, **kwargs):
+def evaluate(args, model, loader, test_type, grid_size=None, grid_h=None, grid_w=None, **kwargs):
     device = torch.device('cuda')
     top1_meter = 0
     total = 0
@@ -311,7 +330,7 @@ def evaluate(args, model, loader, test_type, grid_size, **kwargs):
             labels = labels.cuda()
             # 应用破坏
             if test_type == 'shuffle':
-                images = shuffle_patches(images, grid_size)
+                images = shuffle_patches(images, grid_h, grid_w)
             elif test_type == 'random_drop':
                 # 注意：这里需要循环不同 drop_ratio，但为简单，我们只接受一个 ratio 参数
                 # 实际使用中可以在外层循环不同 ratio
@@ -439,8 +458,21 @@ def main():
             acc = evaluate(args, model, loader, 'random_drop', args.grid_size, drop_ratio=ratio)
             print(f"Drop ratio {ratio:.1f} -> Top-1 accuracy: {acc:.2f}%")
     elif args.test_type == 'shuffle':
-        acc = evaluate(args, model, loader, 'shuffle', args.grid_size)
-        print(f"Shuffle {args.grid_size}x{args.grid_size} -> Top-1 accuracy: {acc:.2f}%")
+        if args.shuffle_h is not None and args.shuffle_w is not None:
+            if len(args.shuffle_h) != len(args.shuffle_w):
+                raise ValueError("Lengths of --shuffle_h and --shuffle_w must match")
+            pairs = list(zip(args.shuffle_h, args.shuffle_w))
+        else:
+            pairs = [(args.grid_size, args.grid_size)]
+
+        print("Shuffle test grid pairs (H, W):", pairs)
+        results = {}
+        for h, w in pairs:
+            acc = evaluate(args, model, loader, 'shuffle', grid_h=h, grid_w=w)
+            print(f"Shuffle {h}x{w} -> Top-1 accuracy: {acc:.2f}%")
+            results[f"{h}x{w}"] = acc
+        # acc = evaluate(args, model, loader, 'shuffle', args.grid_size)
+        # print(f"Shuffle {args.grid_size}x{args.grid_size} -> Top-1 accuracy: {acc:.2f}%")
     elif args.test_type == 'scan_line':
         acc = evaluate(args, model, loader, 'scan_line', args.grid_size,
                        exp_num=args.exp_num, direction=args.direction)
